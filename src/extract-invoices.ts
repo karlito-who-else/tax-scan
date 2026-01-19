@@ -1,22 +1,14 @@
-import { exec } from 'node:child_process';
-import * as path from 'node:path';
-import * as crypto from 'node:crypto';
-import Database from 'better-sqlite3';
 import * as fs from 'node:fs/promises';
 import { existsSync, writeFileSync } from 'node:fs';
-import ollama from 'ollama';
+import * as path from 'node:path';
+import * as crypto from 'node:crypto';
+import { exec } from 'node:child_process';
 import { PDFParse } from 'pdf-parse';
+import ollama from 'ollama';
 import { z } from 'zod';
+import Database from 'better-sqlite3';
 
-/**
- * Sends a native macOS notification
- */
-function notify(title: string, msg: string, sound: string = "Glass") {
-    const command = `osascript -e 'display notification "${msg}" with title "${title}" sound name "${sound}"'`;
-    exec(command);
-}
-
-// --- TYPES & INTERFACES ---
+// 1. Database Type Definition
 interface InvoiceRow {
     id: number;
     file_hash: string;
@@ -52,7 +44,30 @@ const InvoiceSchema = z.object({
     totalAmount: z.number().describe("Final total amount"),
 });
 
-// Helper: Calculate UK Tax Year (6 April - 5 April)
+// --- NOTIFICATION & TAGGING HELPERS ---
+
+/**
+ * Sends a native macOS notification
+ */
+function notify(title: string, msg: string, sound: string = "Glass") {
+    const command = `osascript -e 'display notification "${msg}" with title "${title}" sound name "${sound}"'`;
+    exec(command);
+}
+
+/**
+ * Applies macOS Finder Tags for easy browsing
+ */
+function applyMacTags(filePath: string, tags: string[]) {
+    const tagsArray = tags.map(t => `"${t}"`).join(", ");
+    const command = `tell application "Finder" to set tags of (POSIX file "${path.resolve(filePath)}" as alias) to {${tagsArray}}`;
+    exec(command);
+}
+
+// --- TAX LOGIC ---
+
+/**
+ * Calculates UK Tax Year (April 6th to April 5th)
+ */
 function calculateTaxYear(dateStr: string): string {
     const date = new Date(dateStr);
     if (isNaN(date.getTime())) return "Unknown";
@@ -61,19 +76,13 @@ function calculateTaxYear(dateStr: string): string {
     return date >= taxYearStart ? `${year}-${year + 1}` : `${year - 1}-${year}`;
 }
 
-// Helper: Apply macOS Finder Tags
-function applyMacTags(filePath: string, tags: string[]) {
-    const tagsArray = tags.map(t => `"${t}"`).join(", ");
-    const script = `tell application "Finder" to set tags of (POSIX file "${path.resolve(filePath)}" as alias) to {${tagsArray}}`;
-    exec(`osascript -e '${script}'`);
-}
+// --- MAIN AUTOMATION ---
 
 async function getFileHash(filePath: string): Promise<string> {
     const buffer = await fs.readFile(filePath);
     return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-// Scanner that identifies category from the folder path
 async function getInvoices(dir: string): Promise<{path: string, category: string}[]> {
     let results: {path: string, category: string}[] = [];
     if (!existsSync(dir)) return [];
@@ -86,6 +95,7 @@ async function getInvoices(dir: string): Promise<{path: string, category: string
         if (stat.isDirectory()) {
             results = results.concat(await getInvoices(fullPath));
         } else if (fullPath.endsWith('.pdf')) {
+            // Determine category based on parent folder name
             const category = fullPath.toLowerCase().includes('income') ? 'Income' : 
                              fullPath.toLowerCase().includes('expenditure') ? 'Expenditure' : 'Other';
             results.push({ path: fullPath, category });
@@ -98,6 +108,9 @@ async function runTaxAutomation() {
     const ROOT_FOLDER = '/Users/karlpodger/Library/Mobile Documents/com~apple~CloudDocs/Affairs/HMRC/Tax Return';
     const files = await getInvoices(ROOT_FOLDER);
     
+    let newlyAdded = 0;
+    let errors = 0;
+
     const insertStmt = db.prepare(`
         INSERT INTO processed_invoices (file_hash, file_path, vendor, invoice_num, date, tax_year, category, total)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -115,7 +128,7 @@ async function runTaxAutomation() {
             const response = await ollama.chat({
                 model: 'llama3.2',
                 messages: [{ role: 'user', content: `Extract data: ${text.slice(0, 5000)}` }],
-                format: InvoiceSchema.toJsonSchema()
+                format: InvoiceSchema.toJSONSchema()
             });
 
             const inv = InvoiceSchema.parse(JSON.parse(response.message.content));
@@ -123,15 +136,24 @@ async function runTaxAutomation() {
 
             insertStmt.run(hash, path.resolve(fileObj.path), inv.vendorName, inv.invoiceNumber, inv.date, taxYear, fileObj.category, inv.totalAmount);
             
-            // Apply macOS Tags for Finder browsing
+            // 1. Apply Tags to File
             applyMacTags(fileObj.path, [taxYear, fileObj.category]);
             
-            console.log(`✅ Logged & Tagged: ${inv.vendorName} (${taxYear})`);
+            // 2. Notify Success
+            newlyAdded++;
+            notify(`✅ ${fileObj.category} Logged`, `${inv.vendorName} (${taxYear}): £${inv.totalAmount}`);
 
         } catch (err) {
-            console.error(`❌ Error on ${fileObj.path}:`, err);
+            errors++;
+            notify("⚠️ Extraction Error", `Check: ${path.basename(fileObj.path)}`, "Basso");
         }
     }
+
+    // Final summary chimes
+    if (newlyAdded > 0 || errors > 0) {
+        notify("Tax Scan Complete", `Processed: ${newlyAdded} new | Errors: ${errors}`, "Hero");
+    }
+    
     exportToCSV();
 }
 

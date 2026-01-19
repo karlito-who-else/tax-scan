@@ -58,9 +58,13 @@ function notify(title: string, msg: string, sound: string = "Glass") {
  * Applies macOS Finder Tags for easy browsing
  */
 function applyMacTags(filePath: string, tags: string[]) {
+    const absolutePath = path.resolve(filePath);
     const tagsArray = tags.map(t => `"${t}"`).join(", ");
-    const command = `tell application "Finder" to set tags of (POSIX file "${path.resolve(filePath)}" as alias) to {${tagsArray}}`;
-    exec(command);
+    
+    const command = `osascript -e 'tell application "Finder" to set tags of (POSIX file "${absolutePath}" as alias) to {${tagsArray}}'`;
+    exec(command, (error) => {
+        if (error) console.error(`⚠️ Tagging Error: ${error.message}`);
+    });
 }
 
 // --- TAX LOGIC ---
@@ -136,13 +140,12 @@ async function runTaxAutomation() {
 
             insertStmt.run(hash, path.resolve(fileObj.path), inv.vendorName, inv.invoiceNumber, inv.date, taxYear, fileObj.category, inv.totalAmount);
             
-            // 1. Apply Tags to File
+            // Apply Tags to File
             applyMacTags(fileObj.path, [taxYear, fileObj.category]);
             
-            // 2. Notify Success
+            // Trigger Success Notification
             newlyAdded++;
             notify(`✅ ${fileObj.category} Logged`, `${inv.vendorName} (${taxYear}): £${inv.totalAmount}`);
-
         } catch (err) {
             errors++;
             notify("⚠️ Extraction Error", `Check: ${path.basename(fileObj.path)}`, "Basso");

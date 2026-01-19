@@ -15,8 +15,7 @@
     "fs-extra": "^11.3.3",
     "ollama": "^0.6.3",
     "pdf-parse": "^2.4.5",
-    "zod": "^4.3.5",
-    "zod-to-json-schema": "^3.25.1"
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

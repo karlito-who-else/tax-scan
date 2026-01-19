@@ -2,26 +2,17 @@ import { exec } from 'node:child_process';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import Database from 'better-sqlite3';
-import * as fs from 'fs-extra';
+import * as fs from 'node:fs/promises';
+import { existsSync, writeFileSync } from 'node:fs';
 import ollama from 'ollama';
 import { PDFParse } from 'pdf-parse';
 import { z } from 'zod';
 
 /**
- * Sends a native macOS alert notification with an error sound
- */
-function sendErrorNotification(title: string, message: string) {
-    // Uses "Basso" sound for errors
-    const command = `osascript -e 'display notification "${message}" with title "❌ ${title}" sound name "Basso"'`;
-    exec(command);
-    console.error(`🚨 [CRITICAL]: ${title} - ${message}`);
-}
-
-/**
  * Sends a native macOS notification
  */
-function sendNotification(title: string, subtitle: string, message: string) {
-    const command = `osascript -e 'display notification "${message}" with title "${title}" subtitle "${subtitle}" sound name "Glass"'`;
+function notify(title: string, msg: string, sound: string = "Glass") {
+    const command = `osascript -e 'display notification "${msg}" with title "${title}" sound name "${sound}"'`;
     exec(command);
 }
 
@@ -54,7 +45,6 @@ db.exec(`
   )
 `);
 
-// 3. Define Schema (Zod v4)
 const InvoiceSchema = z.object({
     invoiceNumber: z.string().describe("The unique reference number of the invoice"),
     date: z.string().describe("The date of the invoice in YYYY-MM-DD format"),
@@ -62,78 +52,65 @@ const InvoiceSchema = z.object({
     totalAmount: z.number().describe("The final total amount due, as a number"),
 });
 
-const TARGET_FOLDER = './Invoices';
 
 async function getFileHash(filePath: string): Promise<string> {
     const buffer = await fs.readFile(filePath);
     return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
+// --- MAIN LOGIC ---
 async function processInvoices() {
+    const TARGET_FOLDER = './Invoices';
     const files = await getFiles(TARGET_FOLDER, '.pdf');
+    
+    let newlyAddedCount = 0;
+    let errorCount = 0;
+
     const checkHashStmt = db.prepare('SELECT id FROM processed_invoices WHERE file_hash = ?');
     const insertStmt = db.prepare(`
         INSERT INTO processed_invoices (file_hash, file_path, file_name, vendor, invoice_num, date, total)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
+    console.log(`🔍 Scanning ${files.length} documents...`);
+
     for (const file of files) {
         try {
             const hash = await getFileHash(file);
-            const absolutePath = path.resolve(file);
+            if (checkHashStmt.get(hash)) continue; // Skip duplicates silently
 
-            if (checkHashStmt.get(hash)) {
-                console.log(`⏩ Skipping duplicate: ${path.basename(file)}`);
-                continue;
-            }
-
-            console.log(`🧠 AI Reading: ${path.basename(file)}...`);
+            console.log(`🧠 AI Parsing: ${path.basename(file)}...`);
             const dataBuffer = await fs.readFile(file);
             const parser = new PDFParse(dataBuffer);
             const { text } = await parser.getText();
 
-            // Native Zod v4 JSON Schema generation
-            const jsonSchema = InvoiceSchema.toJSONSchema();
-
             const response = await ollama.chat({
                 model: 'llama3.2',
-                messages: [{ 
-                    role: 'user', 
-                    content: `Extract structured data from this invoice text: ${text.slice(0, 5000)}` 
-                }],
-                format: jsonSchema // Standard JSON Schema object
+                messages: [{ role: 'user', content: `Extract data: ${text.slice(0, 5000)}` }],
+                format: InvoiceSchema.toJSONSchema() // Native Zod v4 Schema
             });
 
-            const parsedData = InvoiceSchema.parse(JSON.parse(response.message.content));
+            const inv = InvoiceSchema.parse(JSON.parse(response.message.content));
 
-            insertStmt.run(
-                hash,
-                absolutePath,
-                path.basename(file),
-                parsedData.vendorName,
-                parsedData.invoiceNumber,
-                parsedData.date,
-                parsedData.totalAmount
-            );
-
-            sendNotification(
-                "Invoice Processed", 
-                parsedData.vendorName, 
-                `Logged $${parsedData.totalAmount} for ${parsedData.invoiceNumber}`
-            );
-
-            console.log(`✅ Saved: ${parsedData.vendorName} ($${parsedData.totalAmount})`);
-        } catch (error: unknown) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
+            const result = insertStmt.run(hash, path.resolve(file), path.basename(file), inv.vendorName, inv.invoiceNumber, inv.date, inv.totalAmount);
             
-            // Alert the user via macOS Notification Center
-            sendErrorNotification(
-                "Extraction Failed", 
-                `Could not process ${path.basename(file)}: ${errorMessage}`
-            );
+            if (result.changes > 0) {
+                newlyAddedCount++;
+                notify("Invoice Logged", `${inv.vendorName}: $${inv.totalAmount}`, "Glass");
+            }
 
-            console.error(`❌ Error on ${file}:`, error instanceof Error ? error.message : error);
+        } catch (err) {
+            errorCount++;
+            const msg = err instanceof Error ? err.message : "Unknown error";
+            notify("⚠️ Extraction Error", `Failed: ${path.basename(file)}`, "Basso");
+            console.error(`❌ Error on ${file}: ${msg}`);
         }
+    }
+
+    // Final Summary Notification
+    if (newlyAddedCount > 0 || errorCount > 0) {
+        const summaryMsg = `Added: ${newlyAddedCount} | Errors: ${errorCount}`;
+        notify("Scan Complete", summaryMsg, "Hero");
     }
     
     exportToCSV();
@@ -142,19 +119,14 @@ async function processInvoices() {
 function exportToCSV() {
     const rows = db.prepare('SELECT * FROM processed_invoices').all() as InvoiceRow[];
     if (rows.length === 0) return;
-
     const headers = "Vendor,Invoice #,Date,Total,File Name\n";
-    const csv = rows.map(r => 
-        `"${r.vendor}",${r.invoice_num},${r.date},${r.total},"${r.file_name}"`
-    ).join("\n");
-
-    fs.writeFileSync('Numbers_Import.csv', headers + csv);
-    console.log(`\n📂 Updated Numbers_Import.csv with ${rows.length} records.`);
+    const csv = rows.map(r => `"${r.vendor}",${r.invoice_num},${r.date},${r.total},"${r.file_name}"`).join("\n");
+    writeFileSync('Numbers_Import.csv', headers + csv);
 }
 
 async function getFiles(dir: string, ext: string): Promise<string[]> {
     let results: string[] = [];
-    if (!fs.existsSync(dir)) return [];
+    if (!existsSync(dir)) return [];
     const list = await fs.readdir(dir);
     for (const item of list) {
         const fullPath = path.join(dir, item);

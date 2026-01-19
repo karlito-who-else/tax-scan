@@ -13,7 +13,6 @@
   "packageManager": "pnpm@10.28.0",
   "dependencies": {
     "better-sqlite3": "^12.6.2",
-    "fs-extra": "^11.3.3",
     "ollama": "^0.6.3",
     "pdf-parse": "^2.4.5",
     "zod": "^4.3.5"
@@ -22,5 +21,8 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^25.0.9"
-  }
+  },
+  "onlyBuiltDependencies": [
+    "better-sqlite3"
+  ]
 }

@@ -1,13 +1,14 @@
 {
-  "name": "tax-return",
-  "version": "1.0.0",
+  "name": "tax-scan",
+  "version": "0.1.0",
   "description": "",
-  "main": "index.js",
+  "main": "src/extract-invoices.ts",
+  "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": ["tax", "ollama", "pdf", "zod"],
+  "author": "Karl Podger",
   "license": "ISC",
   "packageManager": "pnpm@10.28.0",
   "dependencies": {

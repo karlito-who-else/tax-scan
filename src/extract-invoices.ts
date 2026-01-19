@@ -1,12 +1,31 @@
-import * as fs from 'fs-extra';
+import { exec } from 'node:child_process';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-import { PDFParse } from 'pdf-parse';
-import ollama from 'ollama';
-import { z } from 'zod';
 import Database from 'better-sqlite3';
+import * as fs from 'fs-extra';
+import ollama from 'ollama';
+import { PDFParse } from 'pdf-parse';
+import { z } from 'zod';
 
-// 1. Database Type Definition
+/**
+ * Sends a native macOS alert notification with an error sound
+ */
+function sendErrorNotification(title: string, message: string) {
+    // Uses "Basso" sound for errors
+    const command = `osascript -e 'display notification "${message}" with title "❌ ${title}" sound name "Basso"'`;
+    exec(command);
+    console.error(`🚨 [CRITICAL]: ${title} - ${message}`);
+}
+
+/**
+ * Sends a native macOS notification
+ */
+function sendNotification(title: string, subtitle: string, message: string) {
+    const command = `osascript -e 'display notification "${message}" with title "${title}" subtitle "${subtitle}" sound name "Glass"'`;
+    exec(command);
+}
+
+// --- TYPES & INTERFACES ---
 interface InvoiceRow {
     id: number;
     file_hash: string;
@@ -19,7 +38,7 @@ interface InvoiceRow {
     processed_at: string;
 }
 
-// 2. Initialize SQLite
+// --- DATABASE & SCHEMA SETUP ---
 const db = new Database('invoice_vault.db');
 db.exec(`
   CREATE TABLE IF NOT EXISTS processed_invoices (
@@ -97,8 +116,22 @@ async function processInvoices() {
                 parsedData.totalAmount
             );
 
+            sendNotification(
+                "Invoice Processed", 
+                parsedData.vendorName, 
+                `Logged $${parsedData.totalAmount} for ${parsedData.invoiceNumber}`
+            );
+
             console.log(`✅ Saved: ${parsedData.vendorName} ($${parsedData.totalAmount})`);
-        } catch (error) {
+        } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            
+            // Alert the user via macOS Notification Center
+            sendErrorNotification(
+                "Extraction Failed", 
+                `Could not process ${path.basename(file)}: ${errorMessage}`
+            );
+
             console.error(`❌ Error on ${file}:`, error instanceof Error ? error.message : error);
         }
     }

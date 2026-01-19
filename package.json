@@ -1,0 +1,26 @@
+{
+  "name": "tax-return",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.28.0",
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "fs-extra": "^11.3.3",
+    "ollama": "^0.6.3",
+    "pdf-parse": "^2.4.5",
+    "zod": "^4.3.5",
+    "zod-to-json-schema": "^3.25.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^25.0.9"
+  }
+}

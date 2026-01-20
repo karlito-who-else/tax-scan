@@ -286,9 +286,8 @@ async function runTaxAutomation() {
             newlyAdded++;
             notify(`✅ ${fileObj.category} Logged`, `${inv.vendorName}: £${totalGBP} (from ${rawInv.currency})`);
 
-            // REQUIRED: Wait 2 seconds between files to prevent CPU saturation and freezes
-            await delay(2000);
-
+            // REQUIRED: Wait 250 milliseconds between files to prevent CPU saturation and freezes
+            await delay(250);
         } catch (err: any) {
             errors++;
             // Log the actual error to terminal to see WHY it failed

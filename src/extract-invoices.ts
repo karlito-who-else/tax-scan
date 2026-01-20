@@ -8,6 +8,8 @@ import ollama from 'ollama';
 import { z } from 'zod';
 import Database from 'better-sqlite3';
 
+import 'dotenv/config';
+
 // 1. Database Type Definition
 interface InvoiceRow {
     id: number;
@@ -21,8 +23,12 @@ interface InvoiceRow {
     total: number;
 }
 
-const PROJECT_ROOT = '/Users/karlpodger/Sites/tax-scan';
-const ROOT_FOLDER = '/Users/karlpodger/Library/Mobile Documents/com~apple~CloudDocs/Affairs/HMRC/Tax Return';
+const ROOT_FOLDER = process.env.ROOT_FOLDER;
+
+if (!ROOT_FOLDER) {
+    console.error("❌ ERROR: ROOT_FOLDER is not defined in environment variables.");
+    process.exit(1);
+}
 
 const db = new Database(path.join(ROOT_FOLDER, 'invoice_vault.db'));
 

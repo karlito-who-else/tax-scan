@@ -1,3 +1,4 @@
 node_modules
 invoice_vault.db
 .DS_Store
+.env

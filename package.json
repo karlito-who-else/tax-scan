@@ -7,12 +7,18 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["tax", "ollama", "pdf", "zod"],
+  "keywords": [
+    "tax",
+    "ollama",
+    "pdf",
+    "zod"
+  ],
   "author": "Karl Podger",
   "license": "ISC",
   "packageManager": "pnpm@10.28.0",
   "dependencies": {
     "better-sqlite3": "^12.6.2",
+    "dotenv": "^17.2.3",
     "ollama": "^0.6.3",
     "pdf-parse": "^2.4.5",
     "zod": "^4.3.5"

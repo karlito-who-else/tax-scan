@@ -50,8 +50,6 @@ const InvoiceSchema = z.object({
     totalAmount: z.number().describe("Final total amount"),
 });
 
-// --- NOTIFICATION & TAGGING HELPERS ---
-
 /**
  * Sends a native macOS notification
  */
@@ -62,18 +60,52 @@ function notify(title: string, msg: string, sound: string = "Glass") {
 }
 
 /**
- * Applies macOS Finder Tags for easy browsing
+ * Exports the results to a CSV file
+*/
+function exportToCSV() {
+    const rows = db.prepare('SELECT * FROM processed_invoices').all() as InvoiceRow[];
+    if (rows.length === 0) return;
+    const headers = "Category,Tax Year,Vendor,Invoice #,Date,Total,File Path\n";
+    const csv = rows.map(r => `"${r.category}","${r.tax_year}","${r.vendor}",${r.invoice_num},${r.date},${r.total},"${r.file_path}"`).join("\n");
+    writeFileSync(path.join(PROJECT_ROOT, 'Tax_Summary.csv'), headers + csv);
+}
+
+let startTime = Date.now();
+
+/**
+ * Renders a terminal progress bar
+ */
+function drawProgressBar(current: number, total: number) {
+    const width = 30;
+    const progress = Math.round((current / total) * width);
+    const percentage = Math.round((current / total) * 100);
+    
+    // Calculate ETA
+    const elapsed = (Date.now() - startTime) / 1000;
+    const rate = current / elapsed;
+    const remainingSeconds = Math.round((total - current) / rate);
+    const eta = current > 1 ? `| ETA: ${Math.floor(remainingSeconds / 60)}m ${remainingSeconds % 60}s` : "";
+
+    const bar = "█".repeat(progress) + "░".repeat(width - progress);
+    
+    process.stdout.clearLine(0);
+    process.stdout.cursorTo(0);
+    process.stdout.write(`[${bar}] ${percentage}% | ${current}/${total} Files ${eta}`);
+}
+
+/**
+ * Use the tag utility from homebrew
+ * This bypasses the Finder app and works more reliably with iCloud paths.
  */
 function applyMacTags(filePath: string, tags: string[]) {
-    const absolutePath = path.resolve(filePath);
-    const tagsArray = tags.map(t => `"${t}"`).join(", ");
-    
-    const command = `osascript -e 'tell application "Finder" to set tags of (POSIX file "${absolutePath}" as alias) to {${tagsArray}}'`;
+    const absolutePath = path.resolve(filePath).replaceAll(" ", "\\ ");
 
     try {
-        execSync(command);
+        // We use the 'tag' command if you have it (brew install tag)
+        execSync(`tag --add ${tags.map(t => `"${t}"`).join(",")} ${absolutePath}`)
     } catch (e) {
-        console.error(`Tagging failed for ${absolutePath}`);
+        // If tagging fails, we log it but don't stop the AI
+        console.error(`⚠️ Tagging failed for: ${path.basename(filePath)}. Error: ${e instanceof Error ? e.message : 'Unknown'}`);
     }
 }
 
@@ -125,12 +157,16 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function runTaxAutomation() {
     const files = await getInvoices(ROOT_FOLDER);
-    console.log(`🚀 Starting scan: ${files.length} files found.`);
+    const totalFiles = files.length;
+    startTime = Date.now(); // Reset start time for accurate ETA
     
     let newlyAdded = 0;
     let errors = 0;
 
-    for (const fileObj of files) {
+    for (let i = 0; i < totalFiles; i++) {
+        const fileObj = files[i];
+        drawProgressBar(i + 1, totalFiles);
+
         try {
             const hash = await getFileHash(fileObj.path);
             if (db.prepare('SELECT id FROM processed_invoices WHERE file_hash = ?').get(hash)) {
@@ -163,12 +199,10 @@ async function runTaxAutomation() {
                 format: InvoiceSchema.toJSONSchema()
             });
 
-            // Parse response content
-            const content = response.message.content;
-            const inv = InvoiceSchema.parse(JSON.parse(content));
+            const cleanJson = response.message.content.replace(/```json|```/g, "").trim(); 
+            const inv = InvoiceSchema.parse(JSON.parse(cleanJson));
             const taxYear = calculateTaxYear(inv.date);
 
-            // Database insertion
             db.prepare(`
                 INSERT INTO processed_invoices (file_hash, file_path, vendor, invoice_num, date, tax_year, category, total)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -186,6 +220,9 @@ async function runTaxAutomation() {
             errors++;
             // Log the actual error to terminal to see WHY it failed
             console.error(`❌ Failure on ${path.basename(fileObj.path)}:`, err.message || err);
+            
+            process.stdout.write('\n'); // Ensure error is logged above the bar
+            
             notify("⚠️ Extraction Error", `${path.basename(fileObj.path)}: ${err.message || 'AI Failure'}`, "Basso");
             
             // Wait a moment after an error to let the system recover
@@ -193,19 +230,9 @@ async function runTaxAutomation() {
         }
     }
 
-    if (newlyAdded > 0 || errors > 0) {
-        notify("Tax Scan Complete", `Processed: ${newlyAdded} new | Errors: ${errors}`, "Hero");
-    }
-    
+    process.stdout.write('\n');
+    notify("Tax Scan Complete", `New: ${newlyAdded} | Errors: ${errors}`, "Hero");
     exportToCSV();
-}
-
-function exportToCSV() {
-    const rows = db.prepare('SELECT * FROM processed_invoices').all() as InvoiceRow[];
-    if (rows.length === 0) return;
-    const headers = "Category,Tax Year,Vendor,Invoice #,Date,Total,File Path\n";
-    const csv = rows.map(r => `"${r.category}","${r.tax_year}","${r.vendor}",${r.invoice_num},${r.date},${r.total},"${r.file_path}"`).join("\n");
-    writeFileSync(path.join(PROJECT_ROOT, 'Tax_Summary.csv'), headers + csv);
 }
 
 runTaxAutomation();

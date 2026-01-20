@@ -286,9 +286,12 @@ async function runTaxAutomation() {
         }
     }
 
-    process.stdout.write('\n');
+    if (newlyAdded > 0) {
+        process.stdout.write('\n');
+        exportToCSV();
+    }
+
     notify("Tax Scan Complete", `New: ${newlyAdded} | Errors: ${errors}`, "Hero");
-    exportToCSV();
 }
 
 runTaxAutomation();

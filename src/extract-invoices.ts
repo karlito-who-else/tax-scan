@@ -247,10 +247,20 @@ async function runTaxAutomation() {
             
             const response = await ollama.chat({
                 model: 'llama3.2',
-                messages: [{ 
-                    role: 'user', 
-                    content: `Extract structured data from this invoice text. Return valid JSON only: ${text.slice(0, 5000)}` 
-                }],
+                messages: [
+                    // {
+                    //     role: 'user', 
+                    //     content: `Extract structured data from this invoice text. Return valid JSON only: ${text.slice(0, 5000)}` 
+                    // }
+                    {
+                        role: 'system', 
+                        content: "You are a data extraction bot. Return ONLY valid JSON. Return dates in YYYY-MM-DD format. If a date is missing, do not explain; simply fail. Return currencies in ISO 4217 format only. Work out the tax year based on the invoice date. No conversational text or assumptions." 
+                    },
+                    { 
+                        role: 'user', 
+                        content: `Extract from this invoice: ${text.slice(0, 5000)}` 
+                    }
+                ],
                 format: InvoiceSchema.toJSONSchema()
             });
 

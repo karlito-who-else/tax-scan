@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import { existsSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-import { exec } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { PDFParse } from 'pdf-parse';
 import ollama from 'ollama';
 import { z } from 'zod';
@@ -21,7 +21,13 @@ interface InvoiceRow {
     total: number;
 }
 
-const db = new Database('invoice_vault.db');
+const PROJECT_ROOT = '/Users/karlpodger/Sites/tax-scan';
+const ROOT_FOLDER = '/Users/karlpodger/Library/Mobile Documents/com~apple~CloudDocs/Affairs/HMRC/Tax Return';
+// const PROJECT_ROOT = import.meta.dirname;
+// const ROOT_FOLDER = await import(`file:///${process.cwd().replace(/\\/g, '/')}`);
+
+const db = new Database(path.join(PROJECT_ROOT, 'invoice_vault.db'));
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS processed_invoices (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +57,8 @@ const InvoiceSchema = z.object({
  */
 function notify(title: string, msg: string, sound: string = "Glass") {
     const command = `osascript -e 'display notification "${msg}" with title "${title}" sound name "${sound}"'`;
-    exec(command);
+    
+    execSync(command);
 }
 
 /**
@@ -62,9 +69,12 @@ function applyMacTags(filePath: string, tags: string[]) {
     const tagsArray = tags.map(t => `"${t}"`).join(", ");
     
     const command = `osascript -e 'tell application "Finder" to set tags of (POSIX file "${absolutePath}" as alias) to {${tagsArray}}'`;
-    exec(command, (error) => {
-        if (error) console.error(`⚠️ Tagging Error: ${error.message}`);
-    });
+
+    try {
+        execSync(command);
+    } catch (e) {
+        console.error(`Tagging failed for ${absolutePath}`);
+    }
 }
 
 // --- TAX LOGIC ---
@@ -108,51 +118,81 @@ async function getInvoices(dir: string): Promise<{path: string, category: string
     return results;
 }
 
+/**
+ * Throttling helper to prevent system freezes
+ */
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function runTaxAutomation() {
-    const ROOT_FOLDER = '/Users/karlpodger/Library/Mobile Documents/com~apple~CloudDocs/Affairs/HMRC/Tax Return';
     const files = await getInvoices(ROOT_FOLDER);
+    console.log(`🚀 Starting scan: ${files.length} files found.`);
     
     let newlyAdded = 0;
     let errors = 0;
 
-    const insertStmt = db.prepare(`
-        INSERT INTO processed_invoices (file_hash, file_path, vendor, invoice_num, date, tax_year, category, total)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
     for (const fileObj of files) {
         try {
             const hash = await getFileHash(fileObj.path);
-            if (db.prepare('SELECT id FROM processed_invoices WHERE file_hash = ?').get(hash)) continue;
+            if (db.prepare('SELECT id FROM processed_invoices WHERE file_hash = ?').get(hash)) {
+                continue;
+            }
 
+            console.log(`🔍 Reading: ${path.basename(fileObj.path)}`);
             const dataBuffer = await fs.readFile(fileObj.path);
-            const parser = new PDFParse(dataBuffer);
+
+            // Convert Node.js Buffer to Uint8Array to satisfy pdf-parse v2 requirements
+            const uint8Array = new Uint8Array(dataBuffer); 
+
+            const parser = new PDFParse(uint8Array); 
+
             const { text } = await parser.getText();
 
+            // Check if PDF actually has readable text
+            if (!text || text.trim().length < 10) {
+                throw new Error("PDF contains no readable text (it might be an image/scan).");
+            }
+
+            console.log(`🧠 AI Analyzing: ${path.basename(fileObj.path)}...`);
+            
             const response = await ollama.chat({
                 model: 'llama3.2',
-                messages: [{ role: 'user', content: `Extract data: ${text.slice(0, 5000)}` }],
+                messages: [{ 
+                    role: 'user', 
+                    content: `Extract structured data from this invoice text. Return valid JSON only: ${text.slice(0, 5000)}` 
+                }],
                 format: InvoiceSchema.toJSONSchema()
             });
 
-            const inv = InvoiceSchema.parse(JSON.parse(response.message.content));
+            // Parse response content
+            const content = response.message.content;
+            const inv = InvoiceSchema.parse(JSON.parse(content));
             const taxYear = calculateTaxYear(inv.date);
 
-            insertStmt.run(hash, path.resolve(fileObj.path), inv.vendorName, inv.invoiceNumber, inv.date, taxYear, fileObj.category, inv.totalAmount);
+            // Database insertion
+            db.prepare(`
+                INSERT INTO processed_invoices (file_hash, file_path, vendor, invoice_num, date, tax_year, category, total)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(hash, path.resolve(fileObj.path), inv.vendorName, inv.invoiceNumber, inv.date, taxYear, fileObj.category, inv.totalAmount);
             
-            // Apply Tags to File
             applyMacTags(fileObj.path, [taxYear, fileObj.category]);
             
-            // Trigger Success Notification
             newlyAdded++;
-            notify(`✅ ${fileObj.category} Logged`, `${inv.vendorName} (${taxYear}): £${inv.totalAmount}`);
-        } catch (err) {
+            notify(`✅ ${fileObj.category} Logged`, `${inv.vendorName}: £${inv.totalAmount}`);
+
+            // REQUIRED: Wait 2 seconds between files to prevent CPU saturation and freezes
+            await delay(2000);
+
+        } catch (err: any) {
             errors++;
-            notify("⚠️ Extraction Error", `Check: ${path.basename(fileObj.path)}`, "Basso");
+            // Log the actual error to terminal to see WHY it failed
+            console.error(`❌ Failure on ${path.basename(fileObj.path)}:`, err.message || err);
+            notify("⚠️ Extraction Error", `${path.basename(fileObj.path)}: ${err.message || 'AI Failure'}`, "Basso");
+            
+            // Wait a moment after an error to let the system recover
+            await delay(1000);
         }
     }
 
-    // Final summary chimes
     if (newlyAdded > 0 || errors > 0) {
         notify("Tax Scan Complete", `Processed: ${newlyAdded} new | Errors: ${errors}`, "Hero");
     }
@@ -165,7 +205,7 @@ function exportToCSV() {
     if (rows.length === 0) return;
     const headers = "Category,Tax Year,Vendor,Invoice #,Date,Total,File Path\n";
     const csv = rows.map(r => `"${r.category}","${r.tax_year}","${r.vendor}",${r.invoice_num},${r.date},${r.total},"${r.file_path}"`).join("\n");
-    writeFileSync('Tax_Summary.csv', headers + csv);
+    writeFileSync(path.join(PROJECT_ROOT, 'Tax_Summary.csv'), headers + csv);
 }
 
 runTaxAutomation();

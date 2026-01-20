@@ -35,20 +35,49 @@ db.exec(`
     file_path TEXT,
     vendor TEXT,
     invoice_num TEXT,
-    date TEXT,
+    date TEXT, -- YYYY-MM-DD
     tax_year TEXT,
     category TEXT,
-    total REAL,
+    currency TEXT,
+    total_original REAL,
+    exchange_rate REAL,
+    total_gbp REAL,
     processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
 
 const InvoiceSchema = z.object({
     invoiceNumber: z.string().describe("The unique invoice reference"),
-    date: z.string().describe("Invoice date in YYYY-MM-DD format"),
+    date: z.string().describe("Invoice date. Standardise to YYYY-MM-DD format"),
     vendorName: z.string().describe("Company name"),
     totalAmount: z.number().describe("Final total amount"),
+    currency: z.string().describe("3-letter currency code (e.g. GBP, USD, EUR)")
 });
+
+/**
+ * Standardises dates to YYYY-MM-DD
+ */
+function formatDate(dateStr: string): string {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toISOString().split('T')[0];
+}
+
+/**
+ * Fetches historical exchange rate to GBP for a specific date.
+ * Uses a public API (Example: frankfurter.dev which is free and open)
+ */
+async function getExchangeRateToGBP(currency: string, date: string): Promise<number> {
+    if (currency.toUpperCase() === 'GBP') return 1.0;
+    try {
+        const response = await fetch(`https://api.frankfurter.dev/v1/${date}?base=${currency.toUpperCase()}&symbols=GBP`);
+        const data: any = await response.json();
+        return data.rates?.GBP || 1.0;
+    } catch (e) {
+        console.error(`⚠️ Could not fetch rate for ${currency} on ${date}. Defaulting to 1.0`);
+        return 1.0;
+    }
+}
 
 /**
  * Sends a native macOS notification
@@ -199,19 +228,37 @@ async function runTaxAutomation() {
                 format: InvoiceSchema.toJSONSchema()
             });
 
+            const rawInv = InvoiceSchema.parse(JSON.parse(response.message.content.replace(/```json|```/g, "")));
+
             const cleanJson = response.message.content.replace(/```json|```/g, "").trim(); 
             const inv = InvoiceSchema.parse(JSON.parse(cleanJson));
             const taxYear = calculateTaxYear(inv.date);
+            const stdDate = formatDate(inv.date);
+            const rate = await getExchangeRateToGBP(inv.currency, stdDate);
+            const totalGBP = Number((inv.totalAmount * rate).toFixed(2));
 
             db.prepare(`
-                INSERT INTO processed_invoices (file_hash, file_path, vendor, invoice_num, date, tax_year, category, total)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(hash, path.resolve(fileObj.path), inv.vendorName, inv.invoiceNumber, inv.date, taxYear, fileObj.category, inv.totalAmount);
+                INSERT INTO processed_invoices 
+                (file_hash, file_path, vendor, invoice_num, date, tax_year, category, currency, total_original, exchange_rate, total_gbp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                hash, 
+                path.resolve(fileObj.path), 
+                rawInv.vendorName, 
+                rawInv.invoiceNumber, 
+                stdDate, 
+                taxYear, 
+                fileObj.category, 
+                rawInv.currency.toUpperCase(), 
+                rawInv.totalAmount, 
+                rate, 
+                totalGBP
+            );
             
             applyMacTags(fileObj.path, [taxYear, fileObj.category]);
             
             newlyAdded++;
-            notify(`✅ ${fileObj.category} Logged`, `${inv.vendorName}: £${inv.totalAmount}`);
+            notify(`✅ ${fileObj.category} Logged`, `${inv.vendorName}: £${totalGBP} (from ${rawInv.currency})`);
 
             // REQUIRED: Wait 2 seconds between files to prevent CPU saturation and freezes
             await delay(2000);

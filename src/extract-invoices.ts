@@ -25,7 +25,6 @@ interface InvoiceRow {
     tax_year: string;
     category: string;
     total: number;
-    confidence: number;
 }
 
 const ROOT_FOLDER = process.env.ROOT_FOLDER;
@@ -51,17 +50,19 @@ db.exec(`
     total_original REAL,
     exchange_rate REAL,
     total_gbp REAL,
-    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    confidence REAL
+    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
 
 const InvoiceSchema = z.object({
     invoiceNumber: z.string().describe("The unique invoice reference"),
     date: z.string().describe("Invoice date. Standardise to YYYY-MM-DD format"),
+    // date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Invalid date format").describe("Standardised to YYYY-MM-DD"),
+    // date: z.iso.date().describe("Invoice date. Standardise to YYYY-MM-DD format"),
     vendorName: z.string().describe("Company name"),
     totalAmount: z.number().describe("Final total amount"),
-    currency: z.string().describe("3-letter currency code (e.g. GBP, USD, EUR)")
+    currency: z.string().describe("3-letter currency code (e.g. GBP, USD, EUR)"),
+    // confidence: z.number().min(0).max(10).describe("Confidence score from 0 to 1 indicating extraction reliability")
 });
 
 /**
@@ -259,7 +260,7 @@ async function runTaxAutomation() {
             const inv = InvoiceSchema.parse(JSON.parse(cleanJson));
             const taxYear = calculateTaxYear(inv.date);
             const stdDate = formatDate(inv.date);
-            const rate = await getExchangeRateToGBP(inv.currency, stdDate);
+            const rate = await getExchangeRateToGBP(inv.currency, stdDate) ?? 1;
             const totalGBP = Number((inv.totalAmount * rate).toFixed(2));
 
             db.prepare(`
@@ -277,7 +278,7 @@ async function runTaxAutomation() {
                 rawInv.currency.toUpperCase(), 
                 rawInv.totalAmount, 
                 rate, 
-                totalGBP
+                totalGBP,
             );
             
             applyMacTags(fileObj.path, [taxYear, fileObj.category]);

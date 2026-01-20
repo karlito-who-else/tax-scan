@@ -35,7 +35,7 @@ if (!ROOT_FOLDER) {
     process.exit(1);
 }
 
-const db = new Database(path.join(ROOT_FOLDER, 'invoice_vault.db'));
+const db = new Database(path.join(ROOT_FOLDER, 'Tax-Summary.db'));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS processed_invoices (
@@ -115,8 +115,8 @@ function exportToCSV() {
         process.exit(1);
     }
 
-    writeFileSync(path.join(ROOT_FOLDER, 'Tax_Summary.csv'), headers + csv);
-    console.log("📂 Export Complete: Tax_Summary.csv updated.");
+    writeFileSync(path.join(ROOT_FOLDER, 'Tax-Summary.csv'), headers + csv);
+    console.log("📂 Export Complete: Tax-Summary.csv updated.");
 }
 
 let startTime = Date.now();

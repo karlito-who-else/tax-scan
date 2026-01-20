@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.taxscan</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/<USER>>/.nvm/versions/node/v25.2.1/bin/node</string>
+        <string>/Users/<USER>>/Sites/tax-scan/src/extract-invoices.ts</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>1</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/<USER>>/Library/Mobile Documents/com~apple~CloudDocs/Affairs/HMRC/Tax Return</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/<USER>>/Sites/tax-scan</string>
+    <key>StandardOutPath</key>
+    <string>/Users/<USER>>/Library/Mobile Documents/com~apple~CloudDocs/Affairs/HMRC/Tax Return/automation.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/<USER>>/Library/Mobile Documents/com~apple~CloudDocs/Affairs/HMRC/Tax Return/automation.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

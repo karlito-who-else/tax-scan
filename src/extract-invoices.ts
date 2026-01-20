@@ -23,10 +23,8 @@ interface InvoiceRow {
 
 const PROJECT_ROOT = '/Users/karlpodger/Sites/tax-scan';
 const ROOT_FOLDER = '/Users/karlpodger/Library/Mobile Documents/com~apple~CloudDocs/Affairs/HMRC/Tax Return';
-// const PROJECT_ROOT = import.meta.dirname;
-// const ROOT_FOLDER = await import(`file:///${process.cwd().replace(/\\/g, '/')}`);
 
-const db = new Database(path.join(PROJECT_ROOT, 'invoice_vault.db'));
+const db = new Database(path.join(ROOT_FOLDER, 'invoice_vault.db'));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS processed_invoices (
@@ -67,15 +65,15 @@ function formatDate(dateStr: string): string {
  * Fetches historical exchange rate to GBP for a specific date.
  * Uses a public API (Example: frankfurter.dev which is free and open)
  */
-async function getExchangeRateToGBP(currency: string, date: string): Promise<number> {
+async function getExchangeRateToGBP(currency: string, date: string): Promise<number | null> {
     if (currency.toUpperCase() === 'GBP') return 1.0;
     try {
         const response = await fetch(`https://api.frankfurter.dev/v1/${date}?base=${currency.toUpperCase()}&symbols=GBP`);
         const data: any = await response.json();
-        return data.rates?.GBP || 1.0;
+        return data.rates?.GBP;
     } catch (e) {
         console.error(`⚠️ Could not fetch rate for ${currency} on ${date}. Defaulting to 1.0`);
-        return 1.0;
+        return null;
     }
 }
 
@@ -92,11 +90,16 @@ function notify(title: string, msg: string, sound: string = "Glass") {
  * Exports the results to a CSV file
 */
 function exportToCSV() {
-    const rows = db.prepare('SELECT * FROM processed_invoices').all() as InvoiceRow[];
+    const rows = db.prepare('SELECT * FROM processed_invoices ORDER BY date DESC').all() as any[];
     if (rows.length === 0) return;
-    const headers = "Category,Tax Year,Vendor,Invoice #,Date,Total,File Path\n";
-    const csv = rows.map(r => `"${r.category}","${r.tax_year}","${r.vendor}",${r.invoice_num},${r.date},${r.total},"${r.file_path}"`).join("\n");
-    writeFileSync(path.join(PROJECT_ROOT, 'Tax_Summary.csv'), headers + csv);
+
+    const headers = "Date,Category,Tax Year,Vendor,Invoice #,Original Amount,Currency,Rate,Total GBP\n";
+    const csv = rows.map(r => 
+        `${r.date},"${r.category}","${r.tax_year}","${r.vendor}",${r.invoice_num},${r.total_original},${r.currency},${r.exchange_rate},${r.total_gbp}`
+    ).join("\n");
+
+    writeFileSync(path.join(ROOT_FOLDER, 'Tax_Summary.csv'), headers + csv);
+    console.log("📂 Export Complete: Tax_Summary.csv updated.");
 }
 
 let startTime = Date.now();
@@ -131,7 +134,7 @@ function applyMacTags(filePath: string, tags: string[]) {
 
     try {
         // We use the 'tag' command if you have it (brew install tag)
-        execSync(`tag --add ${tags.map(t => `"${t}"`).join(",")} ${absolutePath}`)
+        execSync(`/opt/homebrew/bin/tag --add ${tags.map(t => `"${t}"`).join(",")} ${absolutePath}`)
     } catch (e) {
         // If tagging fails, we log it but don't stop the AI
         console.error(`⚠️ Tagging failed for: ${path.basename(filePath)}. Error: ${e instanceof Error ? e.message : 'Unknown'}`);
@@ -194,7 +197,7 @@ async function runTaxAutomation() {
 
     for (let i = 0; i < totalFiles; i++) {
         const fileObj = files[i];
-        drawProgressBar(i + 1, totalFiles);
+        // drawProgressBar(i + 1, totalFiles); // disabled as process.stdout.clearLine causes is not a function within the plist file
 
         try {
             const hash = await getFileHash(fileObj.path);

@@ -17,10 +17,15 @@ interface InvoiceRow {
     file_path: string;
     vendor: string;
     invoice_num: string;
+    total_original: number;
+    currency: string;
+    exchange_rate: number;
+    total_gbp: number;
     date: string;
     tax_year: string;
     category: string;
     total: number;
+    confidence: number;
 }
 
 const ROOT_FOLDER = process.env.ROOT_FOLDER;
@@ -46,7 +51,8 @@ db.exec(`
     total_original REAL,
     exchange_rate REAL,
     total_gbp REAL,
-    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    processed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    confidence REAL
   )
 `);
 
@@ -96,13 +102,18 @@ function notify(title: string, msg: string, sound: string = "Glass") {
  * Exports the results to a CSV file
 */
 function exportToCSV() {
-    const rows = db.prepare('SELECT * FROM processed_invoices ORDER BY date DESC').all() as any[];
+    const rows = db.prepare('SELECT * FROM processed_invoices ORDER BY date DESC').all() as InvoiceRow[];
     if (rows.length === 0) return;
 
     const headers = "Date,Category,Tax Year,Vendor,Invoice #,Original Amount,Currency,Rate,Total GBP\n";
     const csv = rows.map(r => 
         `${r.date},"${r.category}","${r.tax_year}","${r.vendor}",${r.invoice_num},${r.total_original},${r.currency},${r.exchange_rate},${r.total_gbp}`
     ).join("\n");
+
+    if (!ROOT_FOLDER) {
+        console.error("❌ ERROR: ROOT_FOLDER is not defined in environment variables.");
+        process.exit(1);
+    }
 
     writeFileSync(path.join(ROOT_FOLDER, 'Tax_Summary.csv'), headers + csv);
     console.log("📂 Export Complete: Tax_Summary.csv updated.");
@@ -194,6 +205,11 @@ async function getInvoices(dir: string): Promise<{path: string, category: string
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function runTaxAutomation() {
+    if (!ROOT_FOLDER) {
+        console.error("❌ ERROR: ROOT_FOLDER is not defined in environment variables.");
+        process.exit(1);
+    }
+
     const files = await getInvoices(ROOT_FOLDER);
     const totalFiles = files.length;
     startTime = Date.now(); // Reset start time for accurate ETA
